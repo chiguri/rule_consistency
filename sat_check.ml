@@ -1,4 +1,30 @@
-(* コンパイルはOCamlを入れた状態で ocamlopt str.cmxa sat_check.ml -o sat_check *)
+(* このプログラムはStrモジュールを使っている *)
+(* コンパイルはOCamlを入れた状態で ocamlopt str.cmxa sat_check.ml -o sat_check.exe *)
+(* ocamloptではモジュールに問題がある場合 ocamlc str.cma sat_check.ml -o sat_check.exe *)
+(* インタープリタの場合、#load "str.cma"を実行すること *)
+
+(* environment *)
+(* run on windows (mingw ocaml) *)
+(* in this program, cygwin is not "windows" *)
+let is_windows = false
+(* minisat is on "PATH" *)
+let is_command = true
+
+(* on windows, we can admit ".exe" *)
+let minisat_command = if is_windows || is_command then "minisat" else "./minisat"
+let cnf_filename = "temp_cnf.txt"
+let output_filename = "temp_out.txt"
+let null_output = if is_windows then "nul" else "/dev/null"
+
+let result_filename = "result_sat.txt"
+
+let prolog_rule_output = "input.txt"
+let prolog_expect_output_prefix = "expect"
+
+
+let property_prefix = "p_"
+let category_prefix = "c_"
+
 
 open List
 
@@ -444,15 +470,6 @@ let output_dimacs out cnf num_var =
 (***************************************************************)
 (* execute minisat *)
 
-(* environment *)
-let is_windows = false
-let is_command = false
-
-let minisat_command = if is_windows || is_command then "minisat" else "./minisat"
-let cnf_filename = "temp_cnf.txt"
-let output_filename = "temp_out.txt"
-let null_output = if is_windows then "nul" else "/dev/null"
-
 
 let com_string = minisat_command ^ " " ^ cnf_filename ^ " " ^ output_filename ^ " > " ^ null_output
 
@@ -486,8 +503,10 @@ let test_concatdefs = concat (test_properties @ test_categories)
 let test_varlength = length test_concatdefs
 
 
+
+
 (***************************************************************)
-(* search unsatisfiable tuples *)
+(* some functions for searching unsatisfiable tuples *)
 
 
 let input_list defs vmap =
@@ -503,6 +522,8 @@ let num_to_name concatdefs n =
 
 let lit_num = function
   | Lpos n | Lneg n -> n
+
+
 
 
 
@@ -549,6 +570,149 @@ let print_valuation valuation concatdefs input_num =
 
 
 
+(***************************************************************)
+(* print some data for prolog *)
+
+let search defs v =
+  let rec iter n = function
+    | [] -> raise Not_found
+    | vl :: l -> if mem v vl then n else iter (n+1) l in
+  iter 0 defs
+
+let predicate_string_of_variable pdefs cdefs v =
+  let param =
+    try
+      property_prefix ^ string_of_int (search pdefs v)
+    with
+        Not_found ->
+          category_prefix ^ string_of_int (search cdefs v) in
+    "f(" ^ v ^ ", " ^ param ^ ")"
+
+
+let list_string_of_termlist str_of_term l =
+  "[ " ^ String.concat ", " (map str_of_term l) ^ " ]"
+
+
+(* 本当はなくていいのだけど、コメントのため *)
+let output_def out name defs =
+  let num = ref 0 in
+  iter (fun def ->
+          let n = !num in
+          num := n + 1;
+          output_string out "% ";
+          iter (fun x -> output_string out ("\tf(" ^ x ^ ", " ^ name ^ string_of_int n ^ ")")) def;
+          output_string out "\n") defs;
+  output_string out "\n"
+
+
+let output_comment = output_string
+
+
+let output_head out pred_str_of_var heads =
+  let len = length heads in
+  if len = 0 then () else
+    if len > 1 then (print_string "CAUTION : a head part of each rule should not be disjunction of props; generated prolog script must be meaningless"; print_newline ())
+    else (let head = hd heads in
+            output_string out "imp( ";
+            output_string out (list_string_of_termlist pred_str_of_var head);
+            output_string out ", ")
+
+
+let output_body out pred_str_of_var bodies =
+  output_string out (list_string_of_termlist (list_string_of_termlist pred_str_of_var) bodies);
+  output_string out " ).\n"
+
+
+(* avoid listは要らないと思う。いるなら書く。 *)
+let output_avoid out prefix = ignore
+
+
+(* mapiは4.00以降なので *)
+let mapi f l =
+  let rec iter n = function
+    | [] -> []
+    | x :: l -> f n x :: iter (n+1) l in
+  iter 0 l
+
+let write_expect n input pdefs cdefs =
+  let out = open_out (prolog_expect_output_prefix ^ string_of_int n ^ ".txt") in
+  output_string out "start_set( ";
+  output_string out (list_string_of_termlist (predicate_string_of_variable pdefs cdefs) input);
+  output_string out " ).\nneed( [ ";
+  output_string out (String.concat ", " (mapi (fun i _ -> "f(C" ^ string_of_int i ^ ", " ^ category_prefix ^ string_of_int i ^ ")") cdefs));
+  output_string out " ] ).\n";
+  flush out; close_out out
+
+
+
+
+(***************************************************************)
+(* functions reading definition from stdin *)
+let get_blocks out_block out_com =
+  let rec make_list l =
+    let line = read_line () in
+    let inputs = string_splitter line in
+    if inputs = [] then
+      let result = rev l in (out_block result; result)
+    else
+      let head = hd inputs in
+      if head = "//" then make_list l else
+      if head = "%" then (out_com (line ^ "\n"); make_list l) else make_list (inputs :: l) in
+  make_list []
+
+
+
+let get_defs = get_blocks
+
+let get_rule out_head out_body out_com =
+  let head = get_blocks out_head out_com in
+  if head = [] then None else
+    let body = get_blocks out_body out_com in
+    Some (head, body)
+
+let get_rules out_head out_body out_com =
+  let rec get_list l =
+    match get_rule out_head out_body out_com with
+    | None -> rev l
+    | Some r -> get_list (r :: l) in
+  get_list []
+
+
+let get_avoids = get_blocks
+
+
+
+
+type def_data = { pdefs : def_constrs; cdefs : def_constrs;
+                  rules : rule_description list;
+                  pavoids : rule_atom list list; cavoids : rule_atom list list
+                }
+
+
+let get_data () =
+  let out = open_out prolog_rule_output in
+  output_string out "% Exclusive relations--------------------------------\n";
+  let out_com = output_comment out in
+  let out_def = output_def out in
+  let pdefs = get_defs (out_def property_prefix) out_com in
+  let cdefs = get_defs (out_def category_prefix) out_com in
+  output_string out "\n% Input rules--------------------------------\n";
+  let pred_str_of_var = predicate_string_of_variable pdefs cdefs in
+  let out_head = output_head out pred_str_of_var in
+  let out_body = output_body out pred_str_of_var in
+  let rules = get_rules out_head out_body out_com in
+  let out_avoid = output_avoid out in
+  let pavoids = get_avoids (out_avoid "property") out_com in
+  let cavoids = get_avoids (out_avoid "category") out_com in
+  output_string out "\n";
+  flush out; close_out out;
+  { pdefs = pdefs; cdefs = cdefs;
+    rules = rules;
+    pavoids = pavoids; cavoids = cavoids
+  }
+
+
+
 
 
 
@@ -556,19 +720,18 @@ let print_valuation valuation concatdefs input_num =
 (***************************************************************)
 (* search unsatisfiable tuples *)
 
-let check_consistency cnf inputs avoids concatdefs num_var =
-  let consistent = ref true in
+let check_consistency cnf inputs avoids pdefs cdefs concatdefs num_var =
+  let inconsistent_num = ref 0 in
   iter (fun input ->
     if mem input avoids then () else
       if not (call_minisat (input @ cnf) num_var) then
         (print_string "Inconsistent input : ";
          print_input input concatdefs;
-         print_newline (); consistent := false)) inputs;
-  !consistent
+         print_newline (); write_expect !inconsistent_num (map (fun l -> (num_to_name concatdefs (lit_num (hd l)))) input) pdefs cdefs; inconsistent_num := !inconsistent_num + 1)) inputs;
+  (!inconsistent_num = 0)
 
 
-let check_vagueness cnf inputs avoids pdefs cdefs num_var =
-  let concatdefs = concat (pdefs @ cdefs) in
+let check_ambiguity cnf inputs avoids pdefs cdefs concatdefs num_var =
   let unitary = ref true in
   iter (fun input ->
     if mem input avoids then () else
@@ -578,7 +741,7 @@ let check_vagueness cnf inputs avoids pdefs cdefs num_var =
         if call_minisat (get_valuation_inv values1 :: cur_cnf) num_var then
           (let values2 = get_valuation () in
            let pnum = length pdefs in
-           print_string "Vague input : ";
+           print_string "Input with ambiguous outputs : ";
            print_input input concatdefs;
            print_string " -> ";
            print_valuation_category values1 concatdefs pnum;
@@ -592,72 +755,21 @@ let check_vagueness cnf inputs avoids pdefs cdefs num_var =
 
 
 
-(***************************************************************)
-(* inputs *)
-let get_blocks () =
-  let rec make_list l =
-    let inputs = string_splitter (read_line ()) in
-    if inputs = [] then rev l else
-      if hd inputs = "//" then make_list l else make_list (inputs :: l) in
-  make_list []
-
-
-
-let get_defs = get_blocks
-
-let get_rule () =
-  let head = get_blocks () in
-  if head = [] then None else
-    let body = get_blocks () in
-    Some (head, body)
-
-let get_rules () =
-  let rec get_list l =
-    match get_rule () with
-    | None -> rev l
-    | Some r -> get_list (r :: l) in
-  get_list []
-
-
-let get_avoids = get_blocks
-
-
-
-
-type def_data = { pdefs : def_constrs; cdefs : def_constrs;
-                  forward_rules : rule_description list; backward_rules : rule_description list;
-                  pavoids : rule_atom list list; cavoids : rule_atom list list
-                }
-
-
-let get_data () =
-  let pdefs = get_defs () in
-  let cdefs = get_defs () in
-  let frules = get_rules () in
-  let brules = get_rules () in
-  let pavoids = get_avoids () in
-  let cavoids = get_avoids () in
-  { pdefs = pdefs; cdefs = cdefs;
-    forward_rules = frules; backward_rules = brules;
-    pavoids = pavoids; cavoids = cavoids
-  }
-
-
 
 
 (**********************************************************)
 (* 処理順序 *)
 
-let check_rule_cnf rule_cnf inputs avoids_input concatdefs num_var str =
-  print_string (str ^ " consistency checking : ");
+let check_rule_cnf rule_cnf inputs avoids_input pdefs cdefs concatdefs num_var =
+  print_string ("Consistency of the rules checking :"); print_newline ();
   if not (call_minisat rule_cnf num_var)
-  then (print_string ("NG - " ^ str ^ " unsatisfiable"); print_newline (); false)
-  else (print_string "OK"; print_newline ();
-        print_string (str ^ " with input consistency checking : ");
+  then (print_string ("NG - the rules themselves are unsatisfiable"); print_newline (); false)
+  else (print_string "OK - the rules have one or more satisfiable valuations"; print_newline (); print_newline ();
+        print_string ("Consistency with every input checking : ");
         print_newline ();
-        if check_consistency rule_cnf inputs avoids_input concatdefs num_var
-        then (print_string "OK"; print_newline (); true)
-        else (print_string ("NG - " ^ str ^ " unsatsifiable with some inputs"); print_newline (); false))
+        if check_consistency rule_cnf inputs avoids_input pdefs cdefs concatdefs num_var
+        then (print_string "OK - the rules are consistent"; print_newline (); true)
+        else (print_string "NG - the rules are unsatsifiable with some inputs"; print_newline (); false))
 
 
 let execute def =
@@ -667,23 +779,18 @@ let execute def =
   let num_var = length concatdefs in
   let pr_pexp = defs_to_pexp vmap def.pdefs in
   let cr_pexp = defs_to_pexp vmap def.cdefs in
-  let frule_pexp = rules_to_pexp vmap def.forward_rules in
-  let brule_pexp = rules_to_pexp vmap def.backward_rules in
+  let rule_pexp = rules_to_pexp vmap def.rules in
   let pr_pexp_avoids = and_option pr_pexp (avoids_pexp vmap def.pavoids) in
   let cr_pexp_avoids = and_option cr_pexp (avoids_pexp vmap def.cavoids) in
   let pr_cnf = cnf_transform pr_pexp_avoids in
   let cr_cnf = cnf_transform cr_pexp_avoids in
-  let frule_cnf = cnf_transform frule_pexp in
-  let brule_cnf = cnf_transform brule_pexp in
+  let rule_cnf = cnf_transform rule_pexp in
   let inputs = input_list def.pdefs vmap in
-  let frule_all_cnf = frule_cnf @ pr_cnf @ cr_cnf in
+  let rule_all_cnf = rule_cnf @ pr_cnf @ cr_cnf in
   let avoids_input = avoids_input vmap def.pavoids in
-  check_rule_cnf frule_all_cnf inputs avoids_input concatdefs num_var "forward rule"
+  check_rule_cnf rule_all_cnf inputs avoids_input def.pdefs def.cdefs concatdefs num_var
   &&
-  (let rules_all_cnf = brule_cnf @ frule_all_cnf in
-   check_rule_cnf rules_all_cnf inputs avoids_input concatdefs num_var "forward/backward rules"
-   &&
-   check_vagueness rules_all_cnf inputs avoids_input def.pdefs def.cdefs num_var)
+  check_ambiguity rule_all_cnf inputs avoids_input def.pdefs def.cdefs concatdefs num_var
 ;;
 
 
