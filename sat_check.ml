@@ -2,25 +2,26 @@
 (* コンパイルはOCamlを入れた状態で ocamlopt str.cmxa sat_check.ml -o sat_check.exe *)
 (* ocamloptではモジュールに問題がある場合 ocamlc str.cma sat_check.ml -o sat_check.exe *)
 (* インタープリタの場合、#load "str.cma"を実行すること *)
+(* 分からない人はOCamlをインストールしたあとでocamlcの部分を実行するのが良い（若干遅いが面倒は起きづらい） *)
 
 (* environment *)
 (* run on windows (mingw ocaml) *)
 (* in this program, cygwin is not "windows" *)
 let is_windows = false
-(* minisat is on "PATH" *)
+(* minisat is on "PATH" or not *)
 let is_command = true
 
-(* on windows, we can admit ".exe" *)
+(* on windows, we can admit ".exe" and "./" *)
 let minisat_command = if is_windows || is_command then "minisat" else "./minisat"
 let cnf_filename = "temp_cnf.txt"
 let output_filename = "temp_out.txt"
 let null_output = if is_windows then "nul" else "/dev/null"
 
-let result_filename = "result_sat.txt"
+let result_mapsfilename = "result_maps.txt"
+let result_ambiguousfilename = "result_ambiguous.txt"
 
 let prolog_rule_output = "input.txt"
 let prolog_expect_output_prefix = "expect"
-
 
 let property_prefix = "p_"
 let category_prefix = "c_"
@@ -634,12 +635,17 @@ let mapi f l =
     | x :: l -> f n x :: iter (n+1) l in
   iter 0 l
 
-let write_expect n input pdefs cdefs =
+let write_expect n input pdefs cdefs output =
   let out = open_out (prolog_expect_output_prefix ^ string_of_int n ^ ".txt") in
   output_string out "start_set( ";
   output_string out (list_string_of_termlist (predicate_string_of_variable pdefs cdefs) input);
   output_string out " ).\nneed( [ ";
-  output_string out (String.concat ", " (mapi (fun i _ -> "f(C" ^ string_of_int i ^ ", " ^ category_prefix ^ string_of_int i ^ ")") cdefs));
+(* outputのパターンマッチ *)
+  (match output with
+     | Some output ->
+         output_string out (list_string_of_termlist (predicate_string_of_variable pdefs cdefs) output)
+     | None ->
+         output_string out (String.concat ", " (mapi (fun i _ -> "f(C" ^ string_of_int i ^ ", " ^ category_prefix ^ string_of_int i ^ ")") cdefs)));
   output_string out " ] ).\n";
   flush out; close_out out
 
@@ -680,12 +686,20 @@ let get_rules out_head out_body out_com =
 
 let get_avoids = get_blocks
 
+let get_cases () =
+ let rec get_list l =
+    match get_blocks ignore ignore with
+    | [] -> rev l
+    | [x;y] -> get_list ((x,y) :: l)
+    | _ -> (print_string "Some test cases are not valid format"; print_newline (); assert false) in
+  get_list []
 
 
 
 type def_data = { pdefs : def_constrs; cdefs : def_constrs;
                   rules : rule_description list;
-                  pavoids : rule_atom list list; cavoids : rule_atom list list
+                  pavoids : rule_atom list list; cavoids : rule_atom list list;
+                  cases : (rule_atom list * rule_atom list) list
                 }
 
 
@@ -704,11 +718,12 @@ let get_data () =
   let out_avoid = output_avoid out in
   let pavoids = get_avoids (out_avoid "property") out_com in
   let cavoids = get_avoids (out_avoid "category") out_com in
-  output_string out "\n";
+  let cases = get_cases () in
   flush out; close_out out;
   { pdefs = pdefs; cdefs = cdefs;
     rules = rules;
-    pavoids = pavoids; cavoids = cavoids
+    pavoids = pavoids; cavoids = cavoids;
+    cases = cases
   }
 
 
@@ -720,36 +735,71 @@ let get_data () =
 (***************************************************************)
 (* search unsatisfiable tuples *)
 
-let check_consistency cnf inputs avoids pdefs cdefs concatdefs num_var =
+let check_consistency cnf inputs avoids pdefs cdefs concatdefs num_var cases =
   let inconsistent_num = ref 0 in
   iter (fun input ->
-    if mem input avoids then () else
+    if mem input avoids then ()
+    else try
+      let output = map (fun v -> [ Lpos v ]) (snd (find (fun v -> fst v = input) cases)) in
+        if not (call_minisat (output @ input @ cnf) num_var) then
+          (print_string "Inconsistent input (with test case) : ";
+           print_input input concatdefs;
+           print_newline ();
+           let input = map (fun l -> (num_to_name concatdefs (lit_num (hd l)))) input in
+           let output = map (fun l -> (num_to_name concatdefs (lit_num (hd l)))) output in
+             write_expect !inconsistent_num input pdefs cdefs (Some output);
+             inconsistent_num := !inconsistent_num + 1)
+    with  Not_found ->
       if not (call_minisat (input @ cnf) num_var) then
         (print_string "Inconsistent input : ";
          print_input input concatdefs;
-         print_newline (); write_expect !inconsistent_num (map (fun l -> (num_to_name concatdefs (lit_num (hd l)))) input) pdefs cdefs; inconsistent_num := !inconsistent_num + 1)) inputs;
+         (* print_string " (please write a test-case for this input and re-run)"; *)
+         print_newline ();
+         write_expect !inconsistent_num (map (fun l -> (num_to_name concatdefs (lit_num (hd l)))) input) pdefs cdefs None;
+         inconsistent_num := !inconsistent_num + 1))
+    inputs;
   (!inconsistent_num = 0)
 
 
-let check_ambiguity cnf inputs avoids pdefs cdefs concatdefs num_var =
+(* Not yet to use cases *)
+let check_ambiguity cnf inputs avoids pdefs cdefs concatdefs num_var cases =
   let unitary = ref true in
   iter (fun input ->
-    if mem input avoids then () else
+    if mem input avoids then ()
+    else try
+      let output = snd (find (fun v -> fst v = input) cases) in
       let cur_cnf = input @ cnf in
-      if call_minisat cur_cnf num_var then
-        let values1 = get_valuation () in
-        if call_minisat (get_valuation_inv values1 :: cur_cnf) num_var then
-          (let values2 = get_valuation () in
-           let pnum = length pdefs in
-           print_string "Input with ambiguous outputs : ";
-           print_input input concatdefs;
-           print_string " -> ";
-           print_valuation_category values1 concatdefs pnum;
-           print_string " and ";
-           print_valuation_category values2 concatdefs pnum;
-           print_newline (); unitary := false)) inputs;
-  !unitary
-(* 今は２つしか見せていないが、必要ならすべて見つけることは可能 *)
+        (* テストケースで通ることはもう分かっているので確かめない *)
+        if call_minisat (map (fun v -> Lneg v) output :: cur_cnf) num_var then
+          let value2 = get_valuation () in
+          let pnum = length pdefs in
+            (print_string "Input with output differing from test-case : ";
+             print_input input concatdefs;
+             print_string " -> *";
+             print_tuple output (num_to_name concatdefs);
+             print_string " but also ";
+             print_valuation_category value2 concatdefs pnum;
+             print_newline (); unitary := false)
+        else
+          () (* output to result file *)
+    with  Not_found ->
+      let cur_cnf = input @ cnf in
+        if call_minisat cur_cnf num_var then
+          let values1 = get_valuation () in
+          if call_minisat (get_valuation_inv values1 :: cur_cnf) num_var then
+            (let values2 = get_valuation () in
+             let pnum = length pdefs in
+               print_string "Input with ambiguous outputs : ";
+               print_input input concatdefs;
+               print_string " -> ";
+               print_valuation_category values1 concatdefs pnum;
+               print_string " and ";
+               print_valuation_category values2 concatdefs pnum;
+               print_newline (); unitary := false)
+          else
+            () (* output to result file *) ) inputs;
+    !unitary
+(* 今は２つしか見せていないが、必要ならすべて見つけることも可能 *)
 
 
 
@@ -760,16 +810,16 @@ let check_ambiguity cnf inputs avoids pdefs cdefs concatdefs num_var =
 (**********************************************************)
 (* 処理順序 *)
 
-let check_rule_cnf rule_cnf inputs avoids_input pdefs cdefs concatdefs num_var =
+let check_rule_cnf rule_cnf inputs avoids_input pdefs cdefs concatdefs num_var cases =
   print_string ("Consistency of the rules checking :"); print_newline ();
   if not (call_minisat rule_cnf num_var)
   then (print_string ("NG - the rules themselves are unsatisfiable"); print_newline (); false)
   else (print_string "OK - the rules have one or more satisfiable valuations"; print_newline (); print_newline ();
-        print_string ("Consistency with every input checking : ");
+        print_string ("Consistency with each input checking : ");
         print_newline ();
-        if check_consistency rule_cnf inputs avoids_input pdefs cdefs concatdefs num_var
+        if check_consistency rule_cnf inputs avoids_input pdefs cdefs concatdefs num_var cases
         then (print_string "OK - the rules are consistent"; print_newline (); true)
-        else (print_string "NG - the rules are unsatsifiable with some inputs"; print_newline (); false))
+        else (print_string "NG - the rules are unsatsifiable with some inputs or not satisfying some test cases"; print_newline (); false))
 
 
 let execute def =
@@ -788,9 +838,10 @@ let execute def =
   let inputs = input_list def.pdefs vmap in
   let rule_all_cnf = rule_cnf @ pr_cnf @ cr_cnf in
   let avoids_input = avoids_input vmap def.pavoids in
-  check_rule_cnf rule_all_cnf inputs avoids_input def.pdefs def.cdefs concatdefs num_var
+  let cases = map (fun (p, c) -> (map (fun x -> [ Lpos (vmap x) ]) p, map (fun x -> vmap x) c)) def.cases in
+  check_rule_cnf rule_all_cnf inputs avoids_input def.pdefs def.cdefs concatdefs num_var cases
   &&
-  check_ambiguity rule_all_cnf inputs avoids_input def.pdefs def.cdefs concatdefs num_var
+  check_ambiguity rule_all_cnf inputs avoids_input def.pdefs def.cdefs concatdefs num_var cases
 ;;
 
 
