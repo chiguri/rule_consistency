@@ -7,9 +7,9 @@
 (* environment *)
 (* run on windows (mingw ocaml) *)
 (* in this program, cygwin is not "windows" *)
-let is_windows = false
+let is_windows = true
 (* minisat is on "PATH" or not *)
-let is_command = true
+let is_command = false
 
 (* on windows, we can admit ".exe" and "./" *)
 let minisat_command = if is_windows || is_command then "minisat" else "./minisat"
@@ -18,7 +18,7 @@ let output_filename = "temp_out.txt"
 let null_output = if is_windows then "nul" else "/dev/null"
 
 let result_mapsfilename = "result_maps.txt"
-let result_ambiguousfilename = "result_ambiguous.txt"
+let result_ambiguous_prefix = "ambiguous"
 
 let prolog_rule_output = "input.txt"
 let prolog_expect_output_prefix = "expect"
@@ -532,39 +532,39 @@ let lit_num = function
 (* print result *)
 
 
-let print_tuple input str_fun =
-  print_string "(";
+let output_tuple out input str_fun =
+  output_string out "(";
   (match input with
    | [] -> ()
    | i :: rest ->
-     (print_string (str_fun i); iter (fun t -> print_string ", "; print_string (str_fun t)) rest));
-  print_string ")"
+     (output_string out (str_fun i); iter (fun t -> output_string out ", "; output_string out (str_fun t)) rest));
+  output_string out ")"
 
 (* inputの書式に合わせたもの。汎用性はあまりない *)
-let print_one_lit_list concatdefs = function
+let output_one_lit_list concatdefs = function
   | [ t ] -> num_to_name concatdefs (lit_num t)
   | _ -> assert false
 
-let print_input input concatdefs =
-  print_tuple input (print_one_lit_list concatdefs)
+let output_input out input concatdefs =
+  output_tuple out input (output_one_lit_list concatdefs)
 
 
-let print_valuation_property valuation concatdefs input_num =
+let output_valuation_property out valuation concatdefs input_num =
   let positive_valuation = filter (fun n -> n > 0) valuation in
   let (input, _) = divide_list positive_valuation input_num in
-  print_tuple input (num_to_name concatdefs)
+  output_tuple out input (num_to_name concatdefs)
 
-let print_valuation_category valuation concatdefs input_num =
+let output_valuation_category out valuation concatdefs input_num =
   let positive_valuation = filter (fun n -> n > 0) valuation in
   let (_, output) = divide_list positive_valuation input_num in
-  print_tuple output (num_to_name concatdefs)
+  output_tuple out output (num_to_name concatdefs)
 
-let print_valuation valuation concatdefs input_num =
+let output_valuation out valuation concatdefs input_num =
   let positive_valuation = filter (fun n -> n > 0) valuation in
   let (input , output) = divide_list positive_valuation input_num in
-  print_tuple input (num_to_name concatdefs);
-  print_string " -> ";
-  print_tuple output (num_to_name concatdefs)
+  output_tuple out input (num_to_name concatdefs);
+  output_string out " -> ";
+  output_tuple out output (num_to_name concatdefs)
 
 
 
@@ -743,7 +743,7 @@ let check_consistency cnf inputs avoids pdefs cdefs concatdefs num_var cases =
       let output = map (fun v -> [ Lpos v ]) (snd (find (fun v -> fst v = input) cases)) in
         if not (call_minisat (output @ input @ cnf) num_var) then
           (print_string "Inconsistent input (with test case) : ";
-           print_input input concatdefs;
+           output_input stdout input concatdefs;
            print_newline ();
            let input = map (fun l -> (num_to_name concatdefs (lit_num (hd l)))) input in
            let output = map (fun l -> (num_to_name concatdefs (lit_num (hd l)))) output in
@@ -752,7 +752,7 @@ let check_consistency cnf inputs avoids pdefs cdefs concatdefs num_var cases =
     with  Not_found ->
       if not (call_minisat (input @ cnf) num_var) then
         (print_string "Inconsistent input : ";
-         print_input input concatdefs;
+         output_input stdout input concatdefs;
          (* print_string " (please write a test-case for this input and re-run)"; *)
          print_newline ();
          write_expect !inconsistent_num (map (fun l -> (num_to_name concatdefs (lit_num (hd l)))) input) pdefs cdefs None;
@@ -763,42 +763,65 @@ let check_consistency cnf inputs avoids pdefs cdefs concatdefs num_var cases =
 
 (* Not yet to use cases *)
 let check_ambiguity cnf inputs avoids pdefs cdefs concatdefs num_var cases =
-  let unitary = ref true in
+  let ambiguous_num = ref 0 in
+  let result_file = open_out result_mapsfilename in
+  let rec all_sats cnf values =
+    if call_minisat cnf num_var then
+      (let value = get_valuation () in
+         all_sats (get_valuation_inv value :: cnf) (value :: values))
+    else rev values in
   iter (fun input ->
     if mem input avoids then ()
     else try
       let output = snd (find (fun v -> fst v = input) cases) in
-      let cur_cnf = input @ cnf in
+      let value1 = map (fun v -> Lneg v) output in
+      let cur_cnf = value1 :: input @ cnf in
         (* テストケースで通ることはもう分かっているので確かめない *)
-        if call_minisat (map (fun v -> Lneg v) output :: cur_cnf) num_var then
-          let value2 = get_valuation () in
+      let values = all_sats cur_cnf [] in
+        if values <> [] then
           let pnum = length pdefs in
+          let num = !ambiguous_num in
+          let amb_filename = result_ambiguous_prefix ^ string_of_int num ^ ".txt" in
+          let amb_file = open_out amb_filename in
             (print_string "Input with output differing from test-case : ";
-             print_input input concatdefs;
-             print_string " -> *";
-             print_tuple output (num_to_name concatdefs);
-             print_string " but also ";
-             print_valuation_category value2 concatdefs pnum;
-             print_newline (); unitary := false)
+             output_input stdout input concatdefs;
+             print_string ("see " ^ amb_filename);
+             print_newline ();
+             output_string amb_file "% Properties\n";
+             output_input amb_file input concatdefs; (* input p([..., ..., ... ]  *)
+             output_string amb_file "\n% Categories (the first is expected output)\n";
+             output_tuple amb_file output (num_to_name concatdefs); (* output c([..., ..., ... ])に変更 *)
+             output_string amb_file "\n";
+             iter (fun x -> output_valuation_category amb_file x concatdefs pnum; output_string amb_file "\n") values; (* 同上 *)
+             flush amb_file; close_out amb_file;
+             ambiguous_num := num+1)
         else
           () (* output to result file *)
     with  Not_found ->
       let cur_cnf = input @ cnf in
         if call_minisat cur_cnf num_var then
-          let values1 = get_valuation () in
-          if call_minisat (get_valuation_inv values1 :: cur_cnf) num_var then
-            (let values2 = get_valuation () in
-             let pnum = length pdefs in
+          let value1 = get_valuation () in
+          let values = all_sats (get_valuation_inv value1 :: cur_cnf) [] in
+          if values <> [] then
+            (let pnum = length pdefs in
+             let num = !ambiguous_num in
+             let amb_filename = result_ambiguous_prefix ^ string_of_int num ^ ".txt" in
+             let amb_file = open_out amb_filename in
                print_string "Input with ambiguous outputs : ";
-               print_input input concatdefs;
-               print_string " -> ";
-               print_valuation_category values1 concatdefs pnum;
-               print_string " and ";
-               print_valuation_category values2 concatdefs pnum;
-               print_newline (); unitary := false)
+               output_input stdout input concatdefs;
+               print_string (" -- see " ^ amb_filename);
+               print_newline ();
+               output_string amb_file "% Properties\n";
+               output_input amb_file input concatdefs; (* input p([..., ..., ... ]  *)
+               output_string amb_file "\n% Categories\n";
+               iter (fun x -> output_valuation_category amb_file x concatdefs pnum; output_string amb_file "\n") (value1 :: values); (* c([..., ..., ... ]) *)
+               flush amb_file; close_out amb_file;
+               ambiguous_num := num+1)
           else
-            () (* output to result file *) ) inputs;
-    !unitary
+            () (* output to result file *)
+        else () (* 矛盾してないなら必ず一度は成功するはずだが、変な使い方をするとここに来る可能性もある *) ) inputs;
+    flush result_file; close_out result_file;
+    !ambiguous_num = 0
 (* 今は２つしか見せていないが、必要ならすべて見つけることも可能 *)
 
 
