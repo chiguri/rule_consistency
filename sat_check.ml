@@ -526,6 +526,11 @@ let lit_num = function
 
 
 
+let positive_valuation valuation = filter (fun n -> n > 0) valuation
+
+let split_valuation valuation input_num =
+  divide_list (positive_valuation valuation) input_num
+
 
 
 (***************************************************************)
@@ -549,19 +554,18 @@ let output_input out input concatdefs =
   output_tuple out input (output_one_lit_list concatdefs)
 
 
+(*
 let output_valuation_property out valuation concatdefs input_num =
-  let positive_valuation = filter (fun n -> n > 0) valuation in
-  let (input, _) = divide_list positive_valuation input_num in
-  output_tuple out input (num_to_name concatdefs)
+  output_tuple out (fst (split_valuation valuation input_num) (num_to_name concatdefs)
 
 let output_valuation_category out valuation concatdefs input_num =
-  let positive_valuation = filter (fun n -> n > 0) valuation in
-  let (_, output) = divide_list positive_valuation input_num in
+  output_tuple out (snd (split_valuation valuation input_num) (num_to_name concatdefs)
   output_tuple out output (num_to_name concatdefs)
+*)
+
 
 let output_valuation out valuation concatdefs input_num =
-  let positive_valuation = filter (fun n -> n > 0) valuation in
-  let (input , output) = divide_list positive_valuation input_num in
+  let (input , output) = split_valuation valuation input_num in
   output_tuple out input (num_to_name concatdefs);
   output_string out " -> ";
   output_tuple out output (num_to_name concatdefs)
@@ -639,14 +643,14 @@ let write_expect n input pdefs cdefs output =
   let out = open_out (prolog_expect_output_prefix ^ string_of_int n ^ ".txt") in
   output_string out "start_set( ";
   output_string out (list_string_of_termlist (predicate_string_of_variable pdefs cdefs) input);
-  output_string out " ).\nneed( [ ";
+  output_string out " ).\nneed( ";
 (* outputのパターンマッチ *)
   (match output with
      | Some output ->
          output_string out (list_string_of_termlist (predicate_string_of_variable pdefs cdefs) output)
      | None ->
          output_string out (String.concat ", " (mapi (fun i _ -> "f(C" ^ string_of_int i ^ ", " ^ category_prefix ^ string_of_int i ^ ")") cdefs)));
-  output_string out " ] ).\n";
+  output_string out " ).\n";
   flush out; close_out out
 
 
@@ -729,6 +733,20 @@ let get_data () =
 
 
 
+(***************************************************************)
+(* some misc. functions for ambiguity *)
+let determined_list output values =
+  let len = length output in
+  let rec iter i det =
+    if i < len then
+      let t = nth output i in
+        if for_all (fun x -> t = nth x i) values then
+          iter (i+1) (t :: det)
+        else iter (i+1) det
+    else rev det in
+    iter 0 []
+
+
 
 
 
@@ -770,6 +788,7 @@ let check_ambiguity cnf inputs avoids pdefs cdefs concatdefs num_var cases =
       (let value = get_valuation () in
          all_sats (get_valuation_inv value :: cnf) (value :: values))
     else rev values in
+  output_string result_file "% Already determined input-output\n";
   iter (fun input ->
     if mem input avoids then ()
     else try
@@ -783,20 +802,27 @@ let check_ambiguity cnf inputs avoids pdefs cdefs concatdefs num_var cases =
           let num = !ambiguous_num in
           let amb_filename = result_ambiguous_prefix ^ string_of_int num ^ ".txt" in
           let amb_file = open_out amb_filename in
+          let outputs = map (fun x -> snd (split_valuation x pnum)) values in
             (print_string "Input with output differing from test-case : ";
              output_input stdout input concatdefs;
-             print_string ("see " ^ amb_filename);
+             print_string (" -- see " ^ amb_filename);
              print_newline ();
              output_string amb_file "% Properties\n";
-             output_input amb_file input concatdefs; (* input p([..., ..., ... ]  *)
+             output_input amb_file input concatdefs; (* input p([..., ..., ... ])  *)
              output_string amb_file "\n% Categories (the first is expected output)\n";
              output_tuple amb_file output (num_to_name concatdefs); (* output c([..., ..., ... ])に変更 *)
              output_string amb_file "\n";
-             iter (fun x -> output_valuation_category amb_file x concatdefs pnum; output_string amb_file "\n") values; (* 同上 *)
+             iter (fun x -> output_tuple amb_file x (num_to_name concatdefs); output_string amb_file "\n") outputs; (* 同上 *)
+             output_string amb_file "% Determined categorical values :";
+             iter (fun x -> output_string amb_file (" " ^ num_to_name concatdefs x)) (determined_list output outputs);
+             output_string amb_file "\n";
              flush amb_file; close_out amb_file;
              ambiguous_num := num+1)
         else
-          () (* output to result file *)
+          (output_input result_file input concatdefs;
+           output_string result_file " -> *";
+           output_tuple result_file output (num_to_name concatdefs);
+           output_string result_file "\n")
     with  Not_found ->
       let cur_cnf = input @ cnf in
         if call_minisat cur_cnf num_var then
@@ -807,6 +833,8 @@ let check_ambiguity cnf inputs avoids pdefs cdefs concatdefs num_var cases =
              let num = !ambiguous_num in
              let amb_filename = result_ambiguous_prefix ^ string_of_int num ^ ".txt" in
              let amb_file = open_out amb_filename in
+             let (_, output) = split_valuation value1 pnum in
+             let outputs = map (fun x -> snd (split_valuation x pnum)) values in
                print_string "Input with ambiguous outputs : ";
                output_input stdout input concatdefs;
                print_string (" -- see " ^ amb_filename);
@@ -814,15 +842,18 @@ let check_ambiguity cnf inputs avoids pdefs cdefs concatdefs num_var cases =
                output_string amb_file "% Properties\n";
                output_input amb_file input concatdefs; (* input p([..., ..., ... ]  *)
                output_string amb_file "\n% Categories\n";
-               iter (fun x -> output_valuation_category amb_file x concatdefs pnum; output_string amb_file "\n") (value1 :: values); (* c([..., ..., ... ]) *)
+               iter (fun x -> output_tuple amb_file x (num_to_name concatdefs); output_string amb_file "\n") (output :: outputs); (* c([..., ..., ... ]) *)
+               output_string amb_file "% Determined categorical values :";
+               iter (fun x -> output_string amb_file (" " ^ num_to_name concatdefs x)) (determined_list output outputs);
+               output_string amb_file "\n";
                flush amb_file; close_out amb_file;
                ambiguous_num := num+1)
           else
-            () (* output to result file *)
+            (output_valuation result_file value1 concatdefs (length pdefs);
+             output_string result_file "\n")
         else () (* 矛盾してないなら必ず一度は成功するはずだが、変な使い方をするとここに来る可能性もある *) ) inputs;
     flush result_file; close_out result_file;
     !ambiguous_num = 0
-(* 今は２つしか見せていないが、必要ならすべて見つけることも可能 *)
 
 
 
@@ -841,8 +872,8 @@ let check_rule_cnf rule_cnf inputs avoids_input pdefs cdefs concatdefs num_var c
         print_string ("Consistency with each input checking : ");
         print_newline ();
         if check_consistency rule_cnf inputs avoids_input pdefs cdefs concatdefs num_var cases
-        then (print_string "OK - the rules are consistent"; print_newline (); true)
-        else (print_string "NG - the rules are unsatsifiable with some inputs or not satisfying some test cases"; print_newline (); false))
+        then (print_string "OK - the rules are consistent"; print_newline (); print_newline (); true)
+        else (print_string "NG - the rules are unsatsifiable with some inputs or not satisfying some test cases"; print_newline (); print_newline(); false))
 
 
 let execute def =
