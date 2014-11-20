@@ -1,0 +1,69 @@
+// // のあとはコメントが書ける
+// 空行は定義などの区切り、重要な意味を持つので間違えないこと
+// 要素は空白かタブで区切る
+// 文字コードや改行文字に注意（Ubuntu LinuxではUTF8（シグネチャなし）、LFのみ）
+// 区切りの最初はPropertyの定義
+最初のブロックが始まるまではなにを書いても無視される。
+
+[Property]
+home rest exp
+large small
+paper gum bin
+
+// 次はCategoryの定義
+[Category]
+general industry
+burn unburn nothing
+
+// 次はルール
+// ルールは二つのブロックで構成される。それぞれヘッドとボディ。
+// 行内の要素がandでつながれ、行単位がorでつながれる
+// まず最初のルールのヘッド
+[Rules]
+% これはルール1
+and(home paper) --> and(general burn)
+
+// 次のルール
+% これはルール2
+imp(home, general)
+
+% これがルール3
+bin --> and([general unburn])
+
+exp --> industry
+
+general --> or(home and(rest paper))
+
+imp(burn, or(paper gum))
+
+
+nothing --> -home
+
+
+// なにもないブロック（前のブロック終了を表す空行のあとにもう一つ空行）が来るとルールの定義が一旦終わる。
+// ここはCategoryからPropertyの制約ルール
+// ここから、Propertyにはいってほしくない組み合わせを書く。ただし、最初に定義した順番に、全て列挙すること（いずれ修正する） いわゆるnoPの列挙
+[no_P section]
+exp large bin
+exp small bin
+
+// ここには入力におけるPropertyの組み合わせについて充足しなければならない条件を書く
+[Property rules]
+%% and(rest large) --> -bin
+
+
+// 以下にテストケースを書く
+// 性質の行と分類の行で構成、noPやnoC同様順序と数に注意
+// 矛盾する入力
+[Cases]
+and(rest large bin) --> and(general unburn)
+
+// 矛盾しなかったけど満たさないテストケース（本来の意図はこっちだったとする）
+and(home small bin) --> and(general nothing)
+
+
+[End]
+
+
+以下はなにを書いてもなにもない。
+
