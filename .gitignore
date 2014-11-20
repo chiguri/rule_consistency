@@ -7,3 +7,10 @@
 *.cmx
 *.cmxs
 *.cmxa
+ambiguous*.txt
+expect*.txt
+ignored.txt
+input.txt
+temp_cnf.txt
+temp_out.txt
+result_maps.txt
