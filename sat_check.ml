@@ -42,9 +42,15 @@ let prolog_expect_output_prefix = "expect"
 let property_prefix = "p_"
 let category_prefix = "c_"
 
+
 (* Prologにおける原子論理式のための関数記号 *)
 let atomic_predicate = "f"
 
+let consistent_property = "start_set"
+let consistent_category = "need"
+let ambiguous_property = "p"
+let ambiguous_category = "c"
+let fixed_ambiguous_category = "fixed"
 
 
 let output_string_line out str =
@@ -212,9 +218,9 @@ let output_defs out pred pdefs cdefs =
 
 let write_expect n input defs output =
   let out = open_out (prolog_expect_output_prefix ^ string_of_int n ^ ".txt") in
-  output_string out "start_set( ";
+  output_string out (consistent_property ^ "( ");
   output_string out (list_string_of_termlist defs.pred input);
-  output_string out " ).\nneed( ";
+  output_string out (" ).\n" ^ consistent_category ^ "( ");
 (* outputの有無で出力を変更 *)
   (match output with
      | Some output ->
@@ -730,11 +736,9 @@ let get_data () =
 
 
 
-(* 一応ここまではできているっぽい っぽい *)
 (**************************************************************************************************)
 (* 総当たり検査 *)
 
-(* 以下旧コードなので動かない *)
 
 let check_consistency cnf defs cases =
   let inputs = defs.inputlist in
@@ -798,15 +802,15 @@ let check_ambiguity cnf defs cases =
              output_tuple stdout input;
              print_string (" -- see " ^ amb_filename);
              print_newline ();
-             output_string amb_file "% Properties\np(";
+             output_string amb_file ("% Properties\n" ^ ambiguous_property ^ "(");
              output_string amb_file (list_string_of_termlist defs.pred input);
              output_string amb_file ")\n% Categories (the first is expected output)\n";
-             iter (fun x -> output_string amb_file "c(";
+             iter (fun x -> output_string amb_file (ambiguous_category ^ "(");
                             output_string amb_file (list_string_of_termlist defs.pred x);
                             output_string amb_file ")\n") outputs;
-             output_string amb_file "\n% Determined categorical values :";
-             iter (fun x -> output_string amb_file (" " ^  defs.nmap x)) determined_values;
-             output_string amb_file "\n";
+             output_string amb_file ("\n% Determined categorical values :\n" ^ fixed_ambiguous_category ^ "(");
+             output_string amb_file (list_string_of_termlist defs.pred (map defs.nmap determined_values));
+             output_string amb_file ")\n";
              flush amb_file; close_out amb_file;
              ambiguous_num := num+1)
         else
@@ -831,15 +835,15 @@ let check_ambiguity cnf defs cases =
                output_tuple stdout input;
                print_string (" -- see " ^ amb_filename);
                print_newline ();
-               output_string amb_file "% Properties\np(";
+               output_string amb_file ("% Properties\n" ^ ambiguous_property ^ "(");
                output_string amb_file (list_string_of_termlist defs.pred input);
                output_string amb_file ")\n% Categories\n";
-               iter (fun x -> output_string amb_file "c(";
+               iter (fun x -> output_string amb_file (ambiguous_category ^ "(");
                               output_string amb_file (list_string_of_termlist defs.pred x);
                               output_string amb_file ")\n") outputs;
-               output_string amb_file "\n% Determined categorical values :";
-               iter (fun x -> output_string amb_file (" " ^  defs.nmap x)) determined_values;
-               output_string amb_file "\n";
+               output_string amb_file ("\n% Determined categorical values :\n" ^ fixed_ambiguous_category ^ "(");
+               output_string amb_file (list_string_of_termlist defs.pred (map defs.nmap determined_values));
+               output_string amb_file ")\n";
                flush amb_file; close_out amb_file;
                ambiguous_num := num+1)
           else
