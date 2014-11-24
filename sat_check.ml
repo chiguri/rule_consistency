@@ -804,13 +804,13 @@ let check_ambiguity cnf defs cases =
              print_newline ();
              output_string amb_file ("% Properties\n" ^ ambiguous_property ^ "(");
              output_string amb_file (list_string_of_termlist defs.pred input);
-             output_string amb_file ")\n% Categories (the first is expected output)\n";
+             output_string amb_file ").\n% Categories (the first is expected output)\n";
              iter (fun x -> output_string amb_file (ambiguous_category ^ "(");
                             output_string amb_file (list_string_of_termlist defs.pred x);
-                            output_string amb_file ")\n") outputs;
+                            output_string amb_file ").\n") outputs;
              output_string amb_file ("\n% Determined categorical values :\n" ^ fixed_ambiguous_category ^ "(");
              output_string amb_file (list_string_of_termlist defs.pred (map defs.nmap determined_values));
-             output_string amb_file ")\n";
+             output_string amb_file ").\n";
              flush amb_file; close_out amb_file;
              ambiguous_num := num+1)
         else
@@ -837,13 +837,13 @@ let check_ambiguity cnf defs cases =
                print_newline ();
                output_string amb_file ("% Properties\n" ^ ambiguous_property ^ "(");
                output_string amb_file (list_string_of_termlist defs.pred input);
-               output_string amb_file ")\n% Categories\n";
+               output_string amb_file ").\n% Categories\n";
                iter (fun x -> output_string amb_file (ambiguous_category ^ "(");
                               output_string amb_file (list_string_of_termlist defs.pred x);
-                              output_string amb_file ")\n") outputs;
+                              output_string amb_file ").\n") outputs;
                output_string amb_file ("\n% Determined categorical values :\n" ^ fixed_ambiguous_category ^ "(");
                output_string amb_file (list_string_of_termlist defs.pred (map defs.nmap determined_values));
-               output_string amb_file ")\n";
+               output_string amb_file ").\n";
                flush amb_file; close_out amb_file;
                ambiguous_num := num+1)
           else
