@@ -640,11 +640,18 @@ let remove_ignored out inputlist no_p =
   remove_values inputlist no_p
 
 
-let refine_input out inputlist p_rules vmap =
+let refine_input out inputlist p_rules vmap p_var_num =
   let p_rules = cnf_list_to_dimacs_cnf vmap (map rule_to_cnf p_rules) in
-  let inputlist = map (map vmap) inputlist in
+  let rec iter inputs = function
+    | [] -> rev inputs
+    | x :: xl ->
+        let input = map vmap x in
+        if call_minisat (lift input @ p_rules) p_var_num then
+          iter (input :: inputs) xl
+        else
+          (output_tuple out x; output_string out "\n"; iter inputs xl) in
   output_string out "// ignored by property rules (not satisfying the rules)\n";
-  inputlist (* p_rules‚Æinput‚ğsatƒ\ƒ‹ƒo‚É‚©‚¯‚éBê‡‚É‚æ‚Á‚Ä‚Í[‘«E”ñ[‘«‚ğ‹t‚É‚·‚é *)
+  iter [] inputlist (* p_rules‚Æinput‚ğsatƒ\ƒ‹ƒo‚É‚©‚¯‚éBê‡‚É‚æ‚Á‚Ä‚Í[‘«E”ñ[‘«‚ğ‹t‚É‚·‚é *)
 
 
 
@@ -660,7 +667,7 @@ let make_defs_data pdefs cdefs no_p p_rules =
   let nmap = make_nmap concatdefs in
   let out = open_out result_ignoredfilename in
   let inputlist = remove_ignored out (make_inputlist pdefs) no_p in
-  let inputlist = refine_input out inputlist p_rules vmap in
+  let inputlist = refine_input out inputlist p_rules vmap p_var_num in
   flush out; close_out out;
   let restrictions = cnf_to_dimacs_cnf vmap (defs_to_cnf_restriction (pdefs @ cdefs)) in
   {
