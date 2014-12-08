@@ -284,7 +284,7 @@ let output_num_tuple out nmap tuple =
 let rec output_pexp out = function
   | Plit x  -> output_string out x
   | Pand pl -> output_string out "and( "; iter (fun p -> output_pexp out p; output_string out " ") pl; output_string out ")"
-  | Por  pl -> output_string out "or( " ; iter (output_pexp out) pl; output_string out " )"
+  | Por  pl -> output_string out "or( " ; iter (fun p -> output_pexp out p; output_string out " ") pl; output_string out " )"
   | Pnot p  -> output_string out "-"; output_pexp out p
 
 
@@ -640,8 +640,8 @@ let remove_ignored out inputlist no_p =
   remove_values inputlist no_p
 
 
-let refine_input out inputlist p_rules vmap p_var_num =
-  let p_rules = cnf_list_to_dimacs_cnf vmap (map rule_to_cnf p_rules) in
+let refine_input out inputlist p_rules vmap p_var_num restrictions =
+  let p_rules = cnf_list_to_dimacs_cnf vmap (map rule_to_cnf p_rules) @ restrictions in
   let rec iter inputs = function
     | [] -> rev inputs
     | x :: xl ->
@@ -667,7 +667,7 @@ let make_defs_data pdefs cdefs no_p p_rules =
   let nmap = make_nmap concatdefs in
   let out = open_out result_ignoredfilename in
   let inputlist = remove_ignored out (make_inputlist pdefs) no_p in
-  let inputlist = refine_input out inputlist p_rules vmap p_var_num in
+  let inputlist = refine_input out inputlist p_rules vmap p_var_num (cnf_to_dimacs_cnf vmap (defs_to_cnf_restriction pdefs)) in
   flush out; close_out out;
   let restrictions = cnf_to_dimacs_cnf vmap (defs_to_cnf_restriction (pdefs @ cdefs)) in
   {
