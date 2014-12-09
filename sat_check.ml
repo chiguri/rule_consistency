@@ -20,7 +20,7 @@ let is_windows = true
 (* minisatがpath上にあり、ディレクトリを指定する必要がない（パス上にない場合はカレントディレクトリに置くこと） *)
 let is_command = false
 
-(* on windows, we can admit ".exe" and "./" *)
+(* on windows, we can omit ".exe" and "./" *)
 let minisat_command = if is_windows || is_command then "minisat" else "./minisat"
 
 (* ファイル名 *)
@@ -31,16 +31,18 @@ let null_output = if is_windows then "nul" else "/dev/null"
 
 
 (* 結果として出力を向けるファイル *)
+let result_filename = "result_input.txt"
 let result_mapsfilename = "result_maps.txt"
-let result_ambiguous_prefix = "ambiguous"
 let result_ignoredfilename = "ignored.txt"
+
+
+
 
 (* Prologのチェック用に用いるファイル *)
 let prolog_rule_output = "input.txt"
-let prolog_expect_output_prefix = "expect"
-
 let property_prefix = "p_"
 let category_prefix = "c_"
+let result_output_prefix = "output"
 
 
 (* Prologにおける原子論理式のための関数記号 *)
@@ -216,27 +218,6 @@ let output_defs out pred pdefs cdefs =
 
 
 
-let write_expect n input defs output =
-  let out = open_out (prolog_expect_output_prefix ^ string_of_int n ^ ".txt") in
-  output_string out (consistent_property ^ "( ");
-  output_string out (list_string_of_termlist defs.pred input);
-  output_string out (" ).\n" ^ consistent_category ^ "( ");
-(* outputの有無で出力を変更 *)
-  (match output with
-     | Some output ->
-         output_string out (list_string_of_termlist defs.pred output)
-     | None ->
-         begin
-           output_string out "[ ";
-           output_string out (String.concat ", " (mapi (fun i _ -> atomic_predicate ^ "(C" ^ string_of_int i ^ ", " ^ category_prefix ^ string_of_int i ^ ")") defs.cdefs));
-           output_string out " ]";
-         end
-  );
-  output_string out " ).\n";
-  flush out; close_out out
-
-
-
 
 
 
@@ -269,6 +250,12 @@ let output_tuple out tuple =
   output_string out (String.concat " " tuple);
   output_string out " )"
 
+(* 単純出力用2 : JavaのGUI用 *)
+let output_tuple2 out tuple =
+  output_string out "(";
+  output_string out (String.concat "," tuple);
+  output_string out ")"
+
 
 (* 入力と出力の分離 ただしdimacs-cnf形式 *)
 let split_inout l p_var_num =
@@ -279,13 +266,63 @@ let split_inout l p_var_num =
 let output_num_tuple out nmap tuple =
   output_tuple out (map nmap tuple)
 
+let output_num_tuple2 out nmap tuple =
+  output_tuple2 out (map nmap tuple)
+
 
 
 let rec output_pexp out = function
   | Plit x  -> output_string out x
   | Pand pl -> output_string out "and( "; iter (fun p -> output_pexp out p; output_string out " ") pl; output_string out ")"
-  | Por  pl -> output_string out "or( " ; iter (fun p -> output_pexp out p; output_string out " ") pl; output_string out " )"
+  | Por  pl -> output_string out "or( " ; iter (fun p -> output_pexp out p; output_string out " ") pl; output_string out ")"
   | Pnot p  -> output_string out "-"; output_pexp out p
+
+
+
+(* 結果をファイルに書き出す関数 *)
+let output_result out input mark filename =
+  output_tuple2 out input;
+  output_string out (":"^mark^":"^filename^"\n")
+
+
+let output_maps out input results =
+  iter (fun x -> output_tuple2 out input; output_string out " -> "; output_tuple2 out x; output_string out "\n") results
+
+
+
+let write_expect output_file input defs output =
+  let out = open_out output_file in
+  output_string out (consistent_property ^ "( ");
+  output_string out (list_string_of_termlist defs.pred input);
+  output_string out " ).\n";
+(* outputの有無で出力を変更 *)
+  (match output with
+     | Some output ->
+         output_string out (consistent_category ^ "( ");
+         output_string out (list_string_of_termlist defs.pred output);
+         output_string out " ).\n"
+     | None ->
+         ()
+  );
+  flush out; close_out out
+
+
+
+let write_ambiguous output_file input defs outputs determined_values test =
+  let amb_file = open_out output_file in
+  output_string amb_file ("% Properties\n" ^ ambiguous_property ^ "(");
+  output_string amb_file (list_string_of_termlist defs.pred input);
+  output_string amb_file (if test then ").\n% Categories (the first is expected output)\n" else ").\n% Categories\n");
+  iter (fun x -> output_string amb_file (ambiguous_category ^ "(");
+          output_string amb_file (list_string_of_termlist defs.pred x);
+          output_string amb_file ").\n") outputs;
+  output_string amb_file ("\n% Determined categorical values :\n" ^ fixed_ambiguous_category ^ "(");
+  output_string amb_file (list_string_of_termlist defs.pred (map defs.nmap determined_values));
+  output_string amb_file ").\n";
+  flush amb_file; close_out amb_file
+
+
+
 
 
 
@@ -746,7 +783,7 @@ let get_data () =
 (**************************************************************************************************)
 (* 総当たり検査 *)
 
-
+(*
 let check_consistency cnf defs cases =
   let inputs = defs.inputlist in
   let inconsistent_num = ref 0 in
@@ -858,13 +895,92 @@ let check_ambiguity cnf defs cases =
              output_string result_file " --> ";
              output_num_tuple result_file defs.nmap output;
              output_string result_file "\n")
-        else () (* 矛盾してないなら必ず一度は成功するはずだが、変な使い方をするとここに来る可能性もある *)
+        else ()
        ) inputs;
   flush result_file; close_out result_file;
   if !ambiguous_num = 0
   then (print_string "OK - the rules are deterministic"; print_newline (); print_newline (); true)
   else (print_string "NG - the rules are ambiguous with some inputs"; print_newline (); print_newline(); false)
+*)
 
+
+
+let check_all cnf defs cases =
+  let inputs = defs.inputlist in
+  let file_num = ref 0 in
+  let result_file = open_out result_filename in
+  let maps_file = open_out result_mapsfilename in
+  let rec all_sats cnf values =
+    if call_minisat cnf defs.var_num then
+      (let value = get_valuation () in
+         all_sats (get_valuation_inv value :: cnf) (value :: values))
+    else rev values in
+  iter (fun input ->
+    try
+      let output = snd (find (fun v -> fst v = input) cases) in
+      if (call_minisat (lift output @ lift input @ cnf) defs.var_num) then
+        let cur_cnf = get_valuation_inv output :: lift input @ cnf in
+        let values = all_sats cur_cnf [] in
+          if values <> [] then
+            let num = !file_num in
+            let filename = result_output_prefix ^ string_of_int num ^ ".txt" in
+            let values = map (fun x -> snd (split_inout x defs.p_var_num)) values in
+            let determined_values = determined_list output values in
+            let outputs = map (map defs.nmap) (output :: values) in
+            let input = map defs.nmap input in
+              (output_result result_file input "a" filename;
+               output_maps maps_file input outputs;
+               write_ambiguous filename input defs outputs determined_values true;
+               file_num := num+1)
+          else
+            let input = map defs.nmap input in
+            let output = map defs.nmap output in
+              (output_result result_file input "d" "";
+               output_maps maps_file input [output])
+      else
+        let values = all_sats (lift input @ cnf) [] in
+        let num = !file_num in
+        let filename = result_output_prefix ^ string_of_int num ^ ".txt" in
+        let values = map (fun x -> snd (split_inout x defs.p_var_num)) values in
+(*        let determined_values = determined_list output values in *)
+        let output = map defs.nmap output in
+        let outputs = map (map defs.nmap) values in
+        let input = map defs.nmap input in
+          (output_result result_file input "t" filename; (* needが合ってないのでinconsistent case with test *)
+           output_maps maps_file input (output :: outputs);
+           write_expect filename input defs (Some output); (* ambiguousもいる？ *)
+           file_num := num+1)
+    with  Not_found ->
+      let cur_cnf = lift input @ cnf in
+        if call_minisat cur_cnf defs.var_num then
+          let output = snd (split_inout (get_valuation ()) defs.p_var_num) in
+          let values = all_sats (get_valuation_inv output :: cur_cnf) [] in
+          if values <> [] then
+            let num = !file_num in
+            let filename = result_output_prefix ^ string_of_int num ^ ".txt" in
+            let values = map (fun x -> snd (split_inout x defs.p_var_num)) values in
+            let determined_values = determined_list output values in
+            let outputs = map (map defs.nmap) (output :: values) in
+            let input = map defs.nmap input in
+              (output_result result_file input "a" filename;
+               output_maps maps_file input outputs;
+               write_ambiguous filename input defs outputs determined_values false;
+               file_num := num+1)
+          else
+            let input = map defs.nmap input in
+            let output = map defs.nmap output in
+              (output_result result_file input "d" "";
+               output_maps maps_file input [output])
+        else
+          let num = !file_num in
+          let filename = result_output_prefix ^ string_of_int num ^ ".txt" in
+          let input = map defs.nmap input in
+            (output_result result_file input "i" filename;
+             write_expect filename input defs None;
+             file_num := num+1)
+       ) inputs;
+  flush result_file; close_out result_file;
+  flush maps_file; close_out maps_file; 0 (* as return 0 *)
 
 
 
@@ -874,9 +990,7 @@ let check_ambiguity cnf defs cases =
 
 let execute def =
   let cnf = def.rules @ def.defs.restrictions in
-  check_consistency cnf def.defs def.cases
-  &&
-  check_ambiguity cnf def.defs def.cases
+  check_all cnf def.defs def.cases
 ;;
 
 execute (get_data ())

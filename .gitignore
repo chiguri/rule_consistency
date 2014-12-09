@@ -14,3 +14,5 @@ input.txt
 temp_cnf.txt
 temp_out.txt
 result_maps.txt
+output*.txt
+result_input.txt
