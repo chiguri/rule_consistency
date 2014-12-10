@@ -947,7 +947,7 @@ let check_all cnf defs cases =
         let outputs = map (map defs.nmap) values in
         let input = map defs.nmap input in
           (output_result result_file input "t" filename; (* need‚ª‡‚Á‚Ä‚È‚¢‚Ì‚Åinconsistent case with test *)
-           output_maps maps_file input (output :: outputs);
+           output_maps maps_file input outputs;
            write_expect filename input defs (Some output); (* ambiguous‚à‚¢‚éH *)
            file_num := num+1)
     with  Not_found ->
