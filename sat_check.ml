@@ -4,6 +4,7 @@
 (* インタープリタ(ocaml)の場合、#load "str.cma"を実行すること *)
 (* 分からない人はOCamlをインストールしたあとでocamlcの部分を実行するのが良い（若干遅いが面倒は起きづらい） *)
 
+(*** uncaught exceptionの場合（入力が変な場合とか）、2が返ってくる。通常は0が返ってくる。 ***)
 
 (*** 最初のルール単体の検証はやめた。その方法で矛盾してもそもそも情報がなさ過ぎるため、どう直して良いか分からない。それだとあまりやる意味もない。 ***)
 
@@ -53,6 +54,9 @@ let consistent_category = "need"
 let ambiguous_property = "p"
 let ambiguous_category = "c"
 let fixed_ambiguous_category = "fixed"
+
+
+let input_filename = "rule.txt"
 
 
 let output_string_line out str =
@@ -422,6 +426,9 @@ let get_rule orig =
 
 
 
+let read_from = open_in input_filename
+(* read_from = stdin *)
+
 
 (* Prolog用のコメントを出力する関数が prolog_com_output *)
 let rec get_next prolog_com_output =
@@ -432,7 +439,7 @@ let rec get_next prolog_com_output =
         match get_lexed s with
           | [] -> get_next prolog_com_output
           | x :: xl -> x :: (remove_values xl [Delim "["; Delim "]"]) (* 先頭以外の[]は無視する（Prologスタイルの読み込みのため） *) in
-  match read_line () with
+  match input_line read_from with
     | s when is_prolog_dcomment s -> line_process (String.sub s 2 (String.length s - 2))
     | s -> line_process s
 
