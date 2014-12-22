@@ -33,6 +33,7 @@ let null_output = if is_windows then "nul" else "/dev/null"
 
 (* 結果として出力を向けるファイル *)
 let result_filename = "result_input.txt"
+let result_outputfilename = "result_output.txt"
 let result_mapsfilename = "result_maps.txt"
 let result_ignoredfilename = "ignored.txt"
 
@@ -914,6 +915,7 @@ let check_ambiguity cnf defs cases =
 
 let check_all cnf defs cases =
   let inputs = defs.inputlist in
+  let output_list = ref [] in
   let file_num = ref 0 in
   let result_file = open_out result_filename in
   let maps_file = open_out result_mapsfilename in
@@ -922,6 +924,8 @@ let check_all cnf defs cases =
       (let value = get_valuation () in
          all_sats (get_valuation_inv value :: cnf) (value :: values))
     else rev values in
+  let insert_outputs outputs =
+    output_list := fold_left (fun output_list x -> if mem x output_list then output_list else x :: output_list) !output_list outputs in
   iter (fun input ->
     try
       let output = snd (find (fun v -> fst v = input) cases) in
@@ -938,24 +942,27 @@ let check_all cnf defs cases =
               (output_result result_file input "a" filename;
                output_maps maps_file input outputs;
                write_ambiguous filename input defs outputs determined_values true;
+               insert_outputs (output :: values);
                file_num := num+1)
           else
             let input = map defs.nmap input in
-            let output = map defs.nmap output in
+            let output_n = map defs.nmap output in
               (output_result result_file input "d" "";
-               output_maps maps_file input [output])
+               output_maps maps_file input [output_n];
+               insert_outputs [output])
       else
         let values = all_sats (lift input @ cnf) [] in
         let num = !file_num in
         let filename = result_output_prefix ^ string_of_int num ^ ".txt" in
         let values = map (fun x -> snd (split_inout x defs.p_var_num)) values in
 (*        let determined_values = determined_list output values in *)
-        let output = map defs.nmap output in
+        let output_n = map defs.nmap output in
         let outputs = map (map defs.nmap) values in
         let input = map defs.nmap input in
           (output_result result_file input "t" filename; (* needが合ってないのでinconsistent case with test *)
            output_maps maps_file input outputs;
-           write_expect filename input defs (Some output); (* ambiguousもいる？ *)
+           write_expect filename input defs (Some output_n); (* ambiguousもいる？ *)
+           insert_outputs (output :: values);
            file_num := num+1)
     with  Not_found ->
       let cur_cnf = lift input @ cnf in
@@ -972,12 +979,14 @@ let check_all cnf defs cases =
               (output_result result_file input "a" filename;
                output_maps maps_file input outputs;
                write_ambiguous filename input defs outputs determined_values false;
+               insert_outputs (output :: values);
                file_num := num+1)
           else
             let input = map defs.nmap input in
-            let output = map defs.nmap output in
+            let output_n = map defs.nmap output in
               (output_result result_file input "d" "";
-               output_maps maps_file input [output])
+               output_maps maps_file input [output_n];
+               insert_outputs [output])
         else
           let num = !file_num in
           let filename = result_output_prefix ^ string_of_int num ^ ".txt" in
@@ -987,7 +996,11 @@ let check_all cnf defs cases =
              file_num := num+1)
        ) inputs;
   flush result_file; close_out result_file;
-  flush maps_file; close_out maps_file; 0 (* as return 0 *)
+  flush maps_file; close_out maps_file;
+  let outputfile = open_out result_outputfilename in
+  iter (fun x -> output_num_tuple2 outputfile defs.nmap x; output_string outputfile "\n") !output_list;
+  flush outputfile; close_out outputfile;
+  0 (* as return 0 *)
 
 
 

@@ -14,7 +14,7 @@ native:
 
 .PHONY:clean
 clean:
-	rm -rf sat_check.exe sat_check.o sat_check.cmx sat_check.cmi sat_check.cmo result_input.txt result_maps.txt output*.txt input.txt ignored.txt temp_cnf.txt temp_out.txt
+	rm -rf sat_check.exe sat_check.o sat_check.cmx sat_check.cmi sat_check.cmo result_input.txt result_output.txt result_maps.txt output*.txt input.txt ignored.txt temp_cnf.txt temp_out.txt
 
 
 .PHONY:test
